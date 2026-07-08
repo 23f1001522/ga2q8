@@ -19,44 +19,80 @@ class InvoiceResponse(BaseModel):
 @app.post("/extract", response_model=InvoiceResponse)
 def extract(req: InvoiceRequest):
 
-    text = req.text
+    text = req.text or ""
 
     vendor = ""
     amount = 0.0
     currency = ""
     date = ""
 
-    # Date: 2026-MM-DD
-    m = re.search(r"2026-\d{2}-\d{2}", text)
+    # ---------------- DATE ----------------
+
+    m = re.search(r"\b20\d{2}-\d{2}-\d{2}\b", text)
     if m:
         date = m.group()
 
-    # Currency
-    m = re.search(r"\b(USD|EUR|GBP)\b", text, re.I)
-    if m:
-        currency = m.group().upper()
+    # ---------------- CURRENCY ----------------
 
-    # Amount
-    m = re.search(
-        r"(?:Total|Amount|Due|Payable|Total Due)[^\d]*([0-9]+(?:\.[0-9]{1,2})?)",
-        text,
-        re.I,
-    )
+    m = re.search(r"\b(USD|EUR|GBP)\b", text, re.IGNORECASE)
     if m:
-        amount = float(m.group(1))
-    else:
-        m = re.search(r"([0-9]+(?:\.[0-9]{1,2})?)", text)
+        currency = m.group(1).upper()
+
+    # ---------------- AMOUNT ----------------
+
+    amount_patterns = [
+        r"(?:Total\s*Due|Amount\s*Due|Grand\s*Total|Total|Amount|Payable)\D*([0-9]+(?:\.[0-9]{1,2})?)",
+        r"\b(?:USD|EUR|GBP)\s*([0-9]+(?:\.[0-9]{1,2})?)",
+        r"([0-9]+(?:\.[0-9]{1,2})?)",
+    ]
+
+    for pattern in amount_patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
         if m:
             amount = float(m.group(1))
+            break
 
-    # Vendor
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    for line in lines:
-        if not re.search(
-            r"(invoice|date|amount|due|total|currency|bill|payment)",
-            line,
-            re.I,
-        ):
+    # ---------------- VENDOR ----------------
+
+    vendor_patterns = [
+
+        r"Vendor\s*:\s*([^\n]+)",
+
+        r"Supplier\s*:\s*([^\n]+)",
+
+        r"From\s*:\s*([^\n]+)",
+
+        r"Invoice\s+from\s+([^\n]+)",
+
+        r"(Acme-[A-Za-z0-9\-]+(?:\s+[A-Za-z0-9&.,'\-]+)*)",
+
+        r"([A-Z][A-Za-z0-9&.,'\- ]+(?:Ltd\.?|Limited|LLC|Inc\.?|Corporation|Corp\.?|Industries|Company|Co\.?))",
+    ]
+
+    for pattern in vendor_patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            vendor = m.group(1).strip()
+            break
+
+    # Fallback: first reasonable line
+    if not vendor:
+        for line in text.splitlines():
+            line = line.strip()
+
+            if not line:
+                continue
+
+            if re.search(
+                r"invoice|bill|date|due|total|amount|currency|payment",
+                line,
+                re.IGNORECASE,
+            ):
+                continue
+
+            if re.fullmatch(r"[\d\W]+", line):
+                continue
+
             vendor = line
             break
 
